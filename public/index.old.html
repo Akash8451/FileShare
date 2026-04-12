@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FileShare - WebRTC P2P</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: auto;
+        }
+
+        .box {
+            border: 2px solid #ccc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+
+        #logs {
+            background: #f4f4f4;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        #imagePreview img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 10px;
+            border: 2px dashed #4CAF50;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h2>FileShare Prototype</h2>
+
+    <div class="box">
+        <h3>1. Discovery</h3>
+        <input type="text" id="roomInput" placeholder="Enter 4-digit code">
+        <button id="joinBtn">Join Room</button>
+        <p><strong>Status:</strong> <span id="statusText">Not connected</span></p>
+    </div>
+
+    <div class="box" id="transferBox" style="opacity: 0.5; pointer-events: none;">
+        <h3>2. Transfer File (P2P)</h3>
+        <input type="file" id="fileInput">
+        <button id="sendBtn">Send File</button>
+        <p><strong>Speed:</strong> <span id="speedText" style="color: blue;">0.00 MB/s</span></p>
+    </div>
+
+    <div class="box">
+        <h3>System Logs & Received Files</h3>
+        <div id="logs"></div>
+        <div id="imagePreview"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const logsDiv = document.getElementById('logs');
+        const statusText = document.getElementById('statusText');
+        const speedText = document.getElementById('speedText');
+        let speedInterval; // Holds our 1-second timer
+        let lastBytes = 0; // Tracks bytes from the previous second
+        const transferBox = document.getElementById('transferBox');
+        const imagePreview = document.getElementById('imagePreview');
+
+        let peerConnection;
+        let dataChannel;
+
+        const rtcConfig = { 
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ],
+            // Prioritize UDP for speed
+            iceCandidatePoolSize: 10
+        };
+
+        function log(msg) {
+            logsDiv.innerHTML += `<div>> ${msg}</div>`;
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        // ==========================================
+        // 1. DISCOVERY & WEBRTC HANDSHAKE (Unchanged)
+        // ==========================================
+        document.getElementById('joinBtn').addEventListener('click', () => {
+            const code = document.getElementById('roomInput').value;
+            if (code) socket.emit('join-room', code);
+        });
+
+        socket.on('user-joined', async (userId) => {
+            log(`Peer joined! Initiating P2P connection...`);
+            enableTransferUI();
+            initializePeerConnection();
+
+            // Create RELIABLE ordered data channel (more stable than unordered)
+            dataChannel = peerConnection.createDataChannel('fileTransferChannel', {
+                ordered: true
+            });
+            setupDataChannelListeners(dataChannel);
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('send-offer', offer);
+        });
+
+        function initializePeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Monitor connection state
+            peerConnection.oniceconnectionstatechange = () => {
+                log(`Network State: <span style="color: orange;">${peerConnection.iceConnectionState}</span>`);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    // Log the selected candidate pair to see if direct or relayed
+                    peerConnection.getStats().then(stats => {
+                        stats.forEach(report => {
+                            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                                log(`<span style="color: cyan;">Connection: ${report.localCandidateId} ↔ ${report.remoteCandidateId}</span>`);
+                            }
+                            if (report.type === 'local-candidate') {
+                                log(`<span style="color: gray;">Local: ${report.candidateType} - ${report.address || report.ip}:${report.port}</span>`);
+                            }
+                            if (report.type === 'remote-candidate') {
+                                log(`<span style="color: gray;">Remote: ${report.candidateType} - ${report.address || report.ip}:${report.port}</span>`);
+                            }
+                        });
+                    });
+                }
+                if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+                    statusText.innerText = "Connection Lost!";
+                    statusText.style.color = "red";
+                    clearInterval(speedInterval);
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) socket.emit('send-ice-candidate', event.candidate);
+            };
+            peerConnection.ondatachannel = (event) => {
+                dataChannel = event.channel;
+                setupDataChannelListeners(dataChannel);
+            };
+        }
+
+        socket.on('receive-offer', async (offer) => {
+            enableTransferUI();
+            initializePeerConnection();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('send-answer', answer);
+        });
+
+        socket.on('receive-answer', async (answer) => {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on('receive-ice-candidate', async (candidate) => {
+            try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); }
+            catch (e) { console.error(e); }
+        });
+
+        // ==========================================
+        // 2. SCALABLE FILE TRANSFER (Chunking Logic)
+        // ==========================================
+
+        // Variables for the receiver
+        let receiveBuffer = [];
+        let receivedSize = 0;
+        let fileMeta = null;
+
+        function setupDataChannelListeners(channel) {
+            channel.binaryType = 'arraybuffer';
+
+            channel.onerror = (error) => {
+                console.error("DataChannel Error:", error);
+                log(`<span style="color: red;">Channel Error! See console.</span>`);
+            };
+
+            channel.onclose = () => {
+                log(`<span style="color: red;">Data Channel closed.</span>`);
+                clearInterval(speedInterval);
+            };
+
+            channel.onopen = () => {
+                log(`<span style="color: green; font-weight: bold;">P2P Tunnel OPEN!</span>`);
+            };
+
+            channel.onmessage = (event) => {
+                if (typeof event.data === 'string') {
+                    fileMeta = JSON.parse(event.data);
+                    receiveBuffer = [];
+                    receivedSize = 0;
+                    lastBytes = 0;
+                    log(`Incoming: ${fileMeta.name} (${(fileMeta.size / 1024 / 1024).toFixed(2)} MB)`);
+
+                    clearInterval(speedInterval);
+                    speedInterval = setInterval(() => {
+                        const speed = receivedSize - lastBytes;
+                        speedText.innerText = `Rx: ${(speed / 1024 / 1024).toFixed(2)} MB/s`;
+                        lastBytes = receivedSize;
+                    }, 1000);
+                } else {
+                    receiveBuffer.push(event.data);
+                    receivedSize += event.data.byteLength;
+
+                    // Throttled progress
+                    if (receiveBuffer.length % 100 === 0 || receivedSize >= fileMeta.size) {
+                        const progress = Math.round((receivedSize / fileMeta.size) * 100);
+                        statusText.innerText = `Receiving: ${progress}%`;
+                    }
+
+                    if (receivedSize >= fileMeta.size) {
+                        clearInterval(speedInterval);
+                        speedText.innerText = `0.00 MB/s`;
+                        log(`<span style="color: blue;">Reassembling...</span>`);
+                        const blob = new Blob(receiveBuffer, { type: fileMeta.mime });
+                        receiveBuffer = []; // Free memory
+                        triggerDownload(blob, fileMeta.name);
+                        statusText.innerText = "Transfer Complete!";
+                        log(`<span style="color: green;">✓ Done!</span>`);
+                    }
+                }
+            };
+        }
+
+        function triggerDownload(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.textContent = `💾 Download ${filename}`;
+            a.style.display = "block";
+            a.style.marginTop = "10px";
+
+            imagePreview.appendChild(a);
+
+            // If it's an image, also show a preview
+            if (blob.type.startsWith('image/')) {
+                const imgElement = document.createElement('img');
+                imgElement.src = url;
+                imagePreview.appendChild(imgElement);
+            }
+        }
+
+        // ============================================================
+        // ADAPTIVE HIGH-SPEED SENDER
+        // Strategy: Keep buffer optimally filled, not empty, not overflowing
+        // ============================================================
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) return alert('Select a file first!');
+
+            // ========== OPTIMIZED FOR SPEED ==========
+            const CHUNK_SIZE = 64 * 1024;      // 64KB - SCTP optimal
+            const LOW_WATER = 512 * 1024;      // 512KB - buffer getting empty, send more
+            const HIGH_WATER = 2 * 1024 * 1024; // 2MB - buffer filling up, pause
+            dataChannel.bufferedAmountLowThreshold = LOW_WATER;
+            // =========================================
+
+            // Send metadata
+            dataChannel.send(JSON.stringify({
+                name: file.name,
+                size: file.size,
+                mime: file.type
+            }));
+
+            let offset = 0;
+            let paused = false;
+
+            // Speed meter
+            let lastOffset = 0;
+            clearInterval(speedInterval);
+            speedInterval = setInterval(() => {
+                const speed = offset - lastOffset;
+                speedText.innerText = `Tx: ${(speed / 1024 / 1024).toFixed(2)} MB/s`;
+                lastOffset = offset;
+            }, 1000);
+
+            // Pre-read chunks into a small queue for speed
+            const chunkQueue = [];
+            const MAX_QUEUE = 8; // Pre-read up to 8 chunks
+            let readOffset = 0;
+            let reading = false;
+            let done = false;
+
+            const readNextChunk = () => {
+                if (reading || readOffset >= file.size || chunkQueue.length >= MAX_QUEUE) return;
+                reading = true;
+                
+                const end = Math.min(readOffset + CHUNK_SIZE, file.size);
+                const slice = file.slice(readOffset, end);
+                const reader = new FileReader();
+                
+                reader.onload = () => {
+                    chunkQueue.push(reader.result);
+                    readOffset = end;
+                    reading = false;
+                    // Keep the queue filled
+                    if (chunkQueue.length < MAX_QUEUE && readOffset < file.size) {
+                        readNextChunk();
+                    }
+                    // If we were paused and waiting for data, try sending
+                    if (!paused) sendChunks();
+                };
+                reader.onerror = () => { reading = false; };
+                reader.readAsArrayBuffer(slice);
+            };
+
+            const sendChunks = () => {
+                if (paused || done) return;
+
+                while (chunkQueue.length > 0 && dataChannel.bufferedAmount < HIGH_WATER) {
+                    if (dataChannel.readyState !== 'open') {
+                        done = true;
+                        clearInterval(speedInterval);
+                        log(`<span style="color: red;">Channel closed!</span>`);
+                        return;
+                    }
+
+                    const chunk = chunkQueue.shift();
+                    dataChannel.send(chunk);
+                    offset += chunk.byteLength;
+
+                    // Keep reading ahead
+                    readNextChunk();
+                }
+
+                // Update progress
+                const progress = Math.round((offset / file.size) * 100);
+                statusText.innerText = `Sending: ${progress}%`;
+
+                // Check if done
+                if (offset >= file.size && chunkQueue.length === 0) {
+                    done = true;
+                    clearInterval(speedInterval);
+                    speedText.innerText = `0.00 MB/s`;
+                    log(`<span style="color: green;">✓ Sent ${(file.size/1024/1024).toFixed(1)} MB!</span>`);
+                    statusText.innerText = "Transfer Complete!";
+                    return;
+                }
+
+                // If buffer is full, pause and wait for drain event
+                if (dataChannel.bufferedAmount >= HIGH_WATER) {
+                    paused = true;
+                    dataChannel.onbufferedamountlow = () => {
+                        dataChannel.onbufferedamountlow = null;
+                        paused = false;
+                        sendChunks(); // Resume
+                    };
+                }
+            };
+
+            log(`Starting high-speed transfer: ${file.name}...`);
+            
+            // Prime the pump - fill the read queue
+            for (let i = 0; i < MAX_QUEUE; i++) {
+                readNextChunk();
+            }
+            
+            // Start sending once we have some chunks
+            setTimeout(() => sendChunks(), 50);
+        });
+
+        function enableTransferUI() {
+            statusText.innerText = "Connected P2P!";
+            statusText.style.color = "green";
+            transferBox.style.opacity = "1";
+            transferBox.style.pointerEvents = "auto";
+        }
+    </script>
+</body>
+
+</html>

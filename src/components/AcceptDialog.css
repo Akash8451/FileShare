@@ -1,0 +1,87 @@
+.accept-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-md);
+}
+
+.accept-dialog {
+  padding: var(--space-xl);
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.accept-dialog__icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-xl);
+  background: var(--bg-glass-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-secondary);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.accept-dialog__title {
+  font-size: var(--font-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.accept-dialog__badge {
+  font-size: var(--font-xxs);
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-glass-strong);
+  color: var(--accent-primary);
+  border: 1px solid var(--border-glass);
+}
+
+.accept-dialog__file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-md);
+  background: var(--bg-glass);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  width: 100%;
+}
+
+.accept-dialog__filename {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.accept-dialog__filesize {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.accept-dialog__actions {
+  display: flex;
+  gap: var(--space-sm);
+  width: 100%;
+  margin-top: var(--space-xs);
+}
+
+.accept-dialog__reject,
+.accept-dialog__accept {
+  flex: 1;
+  padding: 10px;
+}
