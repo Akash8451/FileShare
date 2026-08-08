@@ -109,32 +109,3 @@
   color: var(--accent-primary);
   font-variant-numeric: tabular-nums;
 }
-
-.room-panel__share-row {
-  display: flex;
-  gap: var(--space-sm);
-  width: 100%;
-}
-
-.room-panel__share-row .btn {
-  flex: 1;
-}
-
-.btn-ghost--active {
-  background: var(--bg-glass-strong);
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-}
-
-.room-panel__qr {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) 0;
-}
-
-.room-panel__qr-hint {
-  font-size: var(--font-xxs);
-  color: var(--text-muted);
-}

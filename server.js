@@ -70,10 +70,7 @@ io.on('connection', (socket) => {
         socket.to(socket.roomId).emit('receive-ice-candidate', data);
     });
 
-    // File transfer control signals (accept/reject)
-    socket.on('file-response', (data) => {
-        socket.to(socket.roomId).emit('file-response', data);
-    });
+
 
     socket.on('disconnect', () => {
         console.log(`🔴 Disconnected: ${socket.id}`);

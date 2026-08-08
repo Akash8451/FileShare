@@ -1,14 +1,11 @@
 import { useState } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
-import { HiOutlineQrCode, HiOutlineLink, HiOutlineArrowPath } from 'react-icons/hi2';
+import { HiOutlineArrowPath } from 'react-icons/hi2';
 import { generateRoomCode } from '../utils/helpers';
 import { CONNECTION_STATES } from '../hooks/useWebRTC';
 import './RoomPanel.css';
 
 export default function RoomPanel({ connectionState, onJoinRoom }) {
   const [roomCode, setRoomCode] = useState('');
-  const [showQR, setShowQR] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const isInRoom = connectionState !== CONNECTION_STATES.IDLE;
   const activeCode = roomCode.toUpperCase();
@@ -17,7 +14,6 @@ export default function RoomPanel({ connectionState, onJoinRoom }) {
     const code = generateRoomCode();
     setRoomCode(code);
     onJoinRoom(code);
-    setShowQR(true);
   };
 
   const handleJoin = () => {
@@ -29,19 +25,6 @@ export default function RoomPanel({ connectionState, onJoinRoom }) {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleJoin();
   };
-
-  const handleCopyLink = async () => {
-    const url = `${window.location.origin}?room=${activeCode}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
-  };
-
-  const roomUrl = `${window.location.origin}?room=${activeCode}`;
 
   return (
     <div className="room-panel glass-card animate-slide-up">
@@ -99,34 +82,6 @@ export default function RoomPanel({ connectionState, onJoinRoom }) {
             <span className="room-panel__code-value">{activeCode}</span>
           </div>
 
-          <div className="room-panel__share-row">
-            <button className="btn btn-ghost" onClick={handleCopyLink} id="copy-link-btn">
-              <HiOutlineLink size={14} />
-              {copied ? 'Copied!' : 'Copy Link'}
-            </button>
-            <button
-              className={`btn btn-ghost ${showQR ? 'btn-ghost--active' : ''}`}
-              onClick={() => setShowQR(!showQR)}
-              id="toggle-qr-btn"
-            >
-              <HiOutlineQrCode size={14} />
-              QR Code
-            </button>
-          </div>
-
-          {showQR && (
-            <div className="room-panel__qr animate-fade-in">
-              <QRCodeSVG
-                value={roomUrl}
-                size={160}
-                bgColor="transparent"
-                fgColor="#f0f0f5"
-                level="M"
-                style={{ padding: 12, background: 'rgba(255,255,255,0.05)', borderRadius: 12 }}
-              />
-              <span className="room-panel__qr-hint">Scan to join this room</span>
-            </div>
-          )}
         </div>
       )}
     </div>

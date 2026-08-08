@@ -23,10 +23,9 @@ const MSG_TYPES = {
   FILE_META: 'file-meta',
   FILE_ACCEPT: 'file-accept',
   FILE_REJECT: 'file-reject',
-  TEXT: 'text',
 };
 
-export function useWebRTC(socket, addLog) {
+export function useWebRTC(socket) {
   // ── Peer connection refs ──
   const pcRef = useRef(null);
   const dcRef = useRef(null);
@@ -37,49 +36,24 @@ export function useWebRTC(socket, addLog) {
 
   // ── React state (UI-facing, updated via rAF) ──
   const [connectionState, setConnectionState] = useState(CONNECTION_STATES.IDLE);
-  const [transferProgress, setTransferProgress] = useState(0);
-  const [transferSpeed, setTransferSpeed] = useState(0);
   const [transferDirection, setTransferDirection] = useState(null);
   const [receivedFile, setReceivedFile] = useState(null);
   const [incomingFileInfo, setIncomingFileInfo] = useState(null);
   const [pendingIncoming, setPendingIncoming] = useState(null);
-  const [textMessages, setTextMessages] = useState([]);
   const [iceConfig, setIceConfig] = useState(null);
-  const [multiFileProgress, setMultiFileProgress] = useState(null);
-
-  // ── Hot-path refs (updated per-chunk, NEVER trigger re-render) ──
-  const transferProgressRef = useRef(0);
-  const transferSpeedRef = useRef(0);
 
   // ── Receiver state (all refs — zero re-render overhead) ──
   const receiveBufferRef = useRef([]);
   const receivedSizeRef = useRef(0);
   const fileMetaRef = useRef(null);
-  const lastBytesRef = useRef(0);
 
   // ── Accept/reject async coordination ──
   const pendingAcceptResolveRef = useRef(null);
 
-  // ── Ref bridge for stable closures ──
-  const addLogRef = useRef(addLog);
-  addLogRef.current = addLog;
+  // ── Console logger ──
+  const addLogRef = useRef((msg, type) => console.log(`[${type}] ${msg}`));
 
-  // ── rAF loop: sync refs → state at display refresh rate ──
-  const rafRef = useRef(null);
-  useEffect(() => {
-    let lastProgress = -1;
-    let lastSpeed = -1;
-    const tick = () => {
-      const p = transferProgressRef.current;
-      const s = transferSpeedRef.current;
-      // Only call setState when values actually change
-      if (p !== lastProgress) { setTransferProgress(p); lastProgress = p; }
-      if (s !== lastSpeed) { setTransferSpeed(s); lastSpeed = s; }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+
 
   // ── Fetch ICE config on mount ──
   useEffect(() => {
@@ -99,15 +73,9 @@ export function useWebRTC(socket, addLog) {
       });
   }, []);
 
-  const clearSpeedInterval = useCallback(() => {
-    if (speedIntervalRef.current) {
-      clearInterval(speedIntervalRef.current);
-      speedIntervalRef.current = null;
-    }
-  }, []);
+
 
   const cleanup = useCallback(() => {
-    clearSpeedInterval();
     if (dcRef.current) {
       try { dcRef.current.close(); } catch {}
       dcRef.current = null;
@@ -116,7 +84,7 @@ export function useWebRTC(socket, addLog) {
       try { pcRef.current.close(); } catch {}
       pcRef.current = null;
     }
-  }, [clearSpeedInterval]);
+  }, []);
 
   // ── Data channel message handler (stable via ref bridge) ──
   const handleControlMessage = useCallback((msg) => {
@@ -126,8 +94,6 @@ export function useWebRTC(socket, addLog) {
           name: msg.name,
           size: msg.size,
           mime: msg.mime,
-          fileIndex: msg.fileIndex,
-          totalFiles: msg.totalFiles,
         });
         addLogRef.current(`Incoming: ${msg.name} (${(msg.size / 1024 / 1024).toFixed(2)} MB)`, 'info');
         break;
@@ -145,15 +111,6 @@ export function useWebRTC(socket, addLog) {
           pendingAcceptResolveRef.current = null;
         }
         addLogRef.current('Peer rejected the file.', 'warning');
-        break;
-
-      case MSG_TYPES.TEXT:
-        setTextMessages(prev => [...prev, {
-          text: msg.text,
-          from: 'peer',
-          time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-        }]);
-        addLogRef.current(`Text received: "${msg.text.slice(0, 50)}${msg.text.length > 50 ? '...' : ''}"`, 'info');
         break;
 
       default:
@@ -175,7 +132,6 @@ export function useWebRTC(socket, addLog) {
 
     channel.onclose = () => {
       addLogRef.current('Data channel closed.', 'warning');
-      clearSpeedInterval();
     };
 
     channel.onopen = () => {
@@ -199,28 +155,20 @@ export function useWebRTC(socket, addLog) {
 
         const meta = fileMetaRef.current;
         if (meta) {
-          // Update ref only — rAF loop syncs to state
-          if (receiveBufferRef.current.length % 100 === 0 || receivedSizeRef.current >= meta.size) {
-            transferProgressRef.current = Math.round((receivedSizeRef.current / meta.size) * 100);
-          }
-
           if (receivedSizeRef.current >= meta.size) {
-            clearSpeedInterval();
-            transferSpeedRef.current = 0;
             addLogRef.current('Reassembling file...', 'info');
             const blob = new Blob(receiveBufferRef.current, { type: meta.mime });
             receiveBufferRef.current = [];
 
             const url = URL.createObjectURL(blob);
             setReceivedFile({ url, name: meta.name, mime: meta.mime, size: meta.size });
-            transferProgressRef.current = 100;
             setConnectionState(CONNECTION_STATES.COMPLETE);
             addLogRef.current(`✓ Received ${meta.name}!`, 'success');
           }
         }
       }
     };
-  }, [clearSpeedInterval]); // ← stable: no handleControlMessage dep
+  }, []); // ← stable: no handleControlMessage dep
 
   // ── Reconnection ──
   const attemptReconnect = useCallback(async () => {
@@ -282,7 +230,6 @@ export function useWebRTC(socket, addLog) {
 
       if (state === 'failed') {
         setConnectionState(CONNECTION_STATES.DISCONNECTED);
-        clearSpeedInterval();
         addLogRef.current('Connection failed!', 'error');
         attemptReconnect();
       }
@@ -300,7 +247,7 @@ export function useWebRTC(socket, addLog) {
     };
 
     return pc;
-  }, [socket, iceConfig, clearSpeedInterval, setupDataChannelListeners, attemptReconnect]);
+  }, [socket, iceConfig, setupDataChannelListeners, attemptReconnect]);
 
   // ── Socket signaling listeners ──
   useEffect(() => {
@@ -381,14 +328,10 @@ export function useWebRTC(socket, addLog) {
       roomCodeRef.current = roomCode;
       reconnectCountRef.current = 0;
       setConnectionState(CONNECTION_STATES.WAITING);
-      transferProgressRef.current = 0;
-      transferSpeedRef.current = 0;
       setReceivedFile(null);
       setIncomingFileInfo(null);
       setTransferDirection(null);
       setPendingIncoming(null);
-      setTextMessages([]);
-      setMultiFileProgress(null);
       socket.current.emit('join-room', roomCode);
       addLogRef.current(`Joined room: ${roomCode}`, 'info');
     }
@@ -412,28 +355,13 @@ export function useWebRTC(socket, addLog) {
     fileMetaRef.current = pending;
     receiveBufferRef.current = [];
     receivedSizeRef.current = 0;
-    lastBytesRef.current = 0;
     setTransferDirection('receive');
-    transferProgressRef.current = 0;
     setConnectionState(CONNECTION_STATES.TRANSFERRING);
     setIncomingFileInfo(pending);
     setPendingIncoming(null);
 
-    if (pending.totalFiles > 1) {
-      setMultiFileProgress({
-        current: pending.fileIndex + 1,
-        total: pending.totalFiles,
-        currentName: pending.name,
-      });
-    }
 
-    clearSpeedInterval();
-    speedIntervalRef.current = setInterval(() => {
-      const speed = receivedSizeRef.current - lastBytesRef.current;
-      transferSpeedRef.current = speed; // ← ref, not setState
-      lastBytesRef.current = receivedSizeRef.current;
-    }, 1000);
-  }, [pendingIncoming, clearSpeedInterval]);
+  }, [pendingIncoming]);
 
   // ── Reject incoming file ──
   const rejectIncoming = useCallback(() => {
@@ -454,19 +382,14 @@ export function useWebRTC(socket, addLog) {
    * Uses async/await for the accept handshake, then runs the
    * chunk pipeline synchronously (zero microtask overhead per chunk).
    */
-  const sendSingleFile = useCallback(async (file, fileIndex, totalFiles) => {
+  const sendFile = useCallback(async (file) => {
     const dc = dcRef.current;
     if (!dc || dc.readyState !== 'open') {
       throw new Error('No open channel');
     }
 
     setTransferDirection('send');
-    transferProgressRef.current = 0;
     setConnectionState(CONNECTION_STATES.TRANSFERRING);
-
-    if (totalFiles > 1) {
-      setMultiFileProgress({ current: fileIndex + 1, total: totalFiles, currentName: file.name });
-    }
 
     dc.bufferedAmountLowThreshold = LOW_WATER;
 
@@ -476,8 +399,6 @@ export function useWebRTC(socket, addLog) {
       name: file.name,
       size: file.size,
       mime: file.type,
-      fileIndex,
-      totalFiles,
     }));
 
     addLogRef.current(`Awaiting acceptance for: ${file.name}...`, 'info');
@@ -498,13 +419,6 @@ export function useWebRTC(socket, addLog) {
       let paused = false;
       let lastOffset = 0;
       let done = false;
-
-      // Speed meter — writes to ref, rAF syncs to state
-      clearSpeedInterval();
-      speedIntervalRef.current = setInterval(() => {
-        transferSpeedRef.current = offset - lastOffset; // ← ref, not setState
-        lastOffset = offset;
-      }, 1000);
 
       // Pre-read chunk queue
       const chunkQueue = [];
@@ -538,7 +452,6 @@ export function useWebRTC(socket, addLog) {
         while (chunkQueue.length > 0 && dc.bufferedAmount < HIGH_WATER) {
           if (dc.readyState !== 'open') {
             done = true;
-            clearSpeedInterval();
             addLogRef.current('Channel closed during transfer!', 'error');
             setConnectionState(CONNECTION_STATES.ERROR);
             reject(new Error('Channel closed'));
@@ -551,14 +464,10 @@ export function useWebRTC(socket, addLog) {
           readNextChunk();
         }
 
-        // Update ref only — rAF syncs to React state
-        transferProgressRef.current = Math.round((offset / file.size) * 100);
+
 
         if (offset >= file.size && chunkQueue.length === 0) {
           done = true;
-          clearSpeedInterval();
-          transferSpeedRef.current = 0;
-          transferProgressRef.current = 100;
           addLogRef.current(`✓ Sent ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)!`, 'success');
           resolve('sent');
           return;
@@ -578,64 +487,14 @@ export function useWebRTC(socket, addLog) {
       for (let i = 0; i < MAX_QUEUE; i++) readNextChunk();
       setTimeout(() => sendChunks(), 50);
     });
-  }, [clearSpeedInterval]);
-
-  // ── Send one or multiple files sequentially ──
-  const sendFiles = useCallback(async (files) => {
-    const fileList = Array.from(files);
-    if (fileList.length === 0) return;
-
-    for (let i = 0; i < fileList.length; i++) {
-      try {
-        const result = await sendSingleFile(fileList[i], i, fileList.length);
-        if (result === 'rejected' && fileList.length === 1) {
-          setConnectionState(CONNECTION_STATES.CONNECTED);
-          return;
-        }
-        if (i < fileList.length - 1) {
-          await new Promise(r => setTimeout(r, 500));
-        }
-      } catch (e) {
-        addLogRef.current(`Failed to send ${fileList[i].name}: ${e.message}`, 'error');
-        setConnectionState(CONNECTION_STATES.ERROR);
-        return;
-      }
-    }
-
-    setConnectionState(CONNECTION_STATES.COMPLETE);
-    setMultiFileProgress(null);
-  }, [sendSingleFile]);
-
-  const sendFile = useCallback((file) => {
-    sendFiles([file]);
-  }, [sendFiles]);
-
-  // ── Send text message ──
-  const sendText = useCallback((text) => {
-    const dc = dcRef.current;
-    if (!dc || dc.readyState !== 'open') {
-      addLogRef.current('No open channel!', 'error');
-      return;
-    }
-
-    dc.send(JSON.stringify({ type: MSG_TYPES.TEXT, text }));
-
-    setTextMessages(prev => [...prev, {
-      text,
-      from: 'me',
-      time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-    }]);
-
-    addLogRef.current(`Text sent: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'info');
   }, []);
 
+
+
   const resetTransfer = useCallback(() => {
-    transferProgressRef.current = 0;
-    transferSpeedRef.current = 0;
     setReceivedFile(null);
     setIncomingFileInfo(null);
     setTransferDirection(null);
-    setMultiFileProgress(null);
     if (connectionState === CONNECTION_STATES.COMPLETE) {
       setConnectionState(CONNECTION_STATES.CONNECTED);
     }
@@ -643,18 +502,12 @@ export function useWebRTC(socket, addLog) {
 
   return {
     connectionState,
-    transferProgress,
-    transferSpeed,
     transferDirection,
     receivedFile,
     incomingFileInfo,
     pendingIncoming,
-    textMessages,
-    multiFileProgress,
     joinRoom,
     sendFile,
-    sendFiles,
-    sendText,
     acceptIncoming,
     rejectIncoming,
     resetTransfer,

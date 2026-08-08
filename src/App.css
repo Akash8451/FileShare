@@ -114,6 +114,42 @@
   gap: var(--space-md);
 }
 
+.app__file-input-wrapper {
+  background: var(--bg-glass);
+  border: 1px dashed var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  text-align: center;
+  transition: all var(--transition-base);
+}
+
+.app__file-input-wrapper:hover {
+  border-color: var(--accent-primary);
+}
+
+.app__file-input {
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  max-width: 100%;
+}
+
+.app__file-input::file-selector-button {
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-right: 16px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.app__file-input::file-selector-button:hover {
+  filter: brightness(1.1);
+}
+
 /* Footer */
 .app__footer {
   text-align: center;

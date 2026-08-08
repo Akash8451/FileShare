@@ -1,17 +1,11 @@
 import { CONNECTION_STATES } from '../hooks/useWebRTC';
-import { formatSpeed, formatBytes } from '../utils/helpers';
+import { formatBytes } from '../utils/helpers';
 import './TransferPanel.css';
 
 export default function TransferPanel({
   connectionState,
-  transferProgress,
-  transferSpeed,
   transferDirection,
   receivedFile,
-  onSendFiles,
-  selectedFiles,
-  onReset,
-  multiFileProgress,
 }) {
   const isConnected = [
     CONNECTION_STATES.CONNECTED,
@@ -21,10 +15,7 @@ export default function TransferPanel({
 
   const isTransferring = connectionState === CONNECTION_STATES.TRANSFERRING;
   const isComplete = connectionState === CONNECTION_STATES.COMPLETE;
-  const canSend = connectionState === CONNECTION_STATES.CONNECTED && selectedFiles && selectedFiles.length > 0;
-
   const directionLabel = transferDirection === 'send' ? 'Sending' : 'Receiving';
-  const directionPrefix = transferDirection === 'send' ? 'Tx' : 'Rx';
 
   return (
     <div className={`transfer-panel glass-card animate-slide-up ${!isConnected ? 'transfer-panel--disabled' : ''}`}>
@@ -39,42 +30,19 @@ export default function TransferPanel({
         <div>
           <h2 className="transfer-panel__title">Transfer</h2>
           <p className="transfer-panel__subtitle">
-            {!isConnected ? 'Connect to a peer first' : 'Select files and send'}
+            {!isConnected ? 'Connect to a peer first' : 'Select files above to send'}
           </p>
         </div>
       </div>
 
-      {/* Multi-file indicator */}
-      {multiFileProgress && (isTransferring || isComplete) && (
-        <div className="transfer-panel__multi-badge animate-fade-in">
-          File {multiFileProgress.current} of {multiFileProgress.total}
-          {multiFileProgress.currentName && (
-            <span className="transfer-panel__multi-name"> — {multiFileProgress.currentName}</span>
-          )}
-        </div>
-      )}
 
-      {/* Progress Bar */}
+
+      {/* Basic Status display instead of progress bar */}
       {(isTransferring || isComplete) && (
-        <div className="transfer-panel__progress animate-fade-in">
-          <div className="transfer-panel__progress-header">
-            <span className="transfer-panel__progress-label">
+        <div className="transfer-panel__progress animate-fade-in" style={{ padding: 'var(--space-md) 0' }}>
+          <div className="transfer-panel__progress-header" style={{ justifyContent: 'center' }}>
+            <span className="transfer-panel__progress-label" style={{ fontSize: 'var(--font-lg)' }}>
               {isComplete ? '✓ Complete' : `${directionLabel}...`}
-            </span>
-            <span className="transfer-panel__progress-pct">{transferProgress}%</span>
-          </div>
-
-          <div className="transfer-panel__progress-track">
-            <div
-              className={`transfer-panel__progress-fill ${isComplete ? 'transfer-panel__progress-fill--complete' : ''}`}
-              style={{ width: `${transferProgress}%` }}
-            />
-          </div>
-
-          <div className="transfer-panel__speed-row">
-            <span className="transfer-panel__speed-label">{directionPrefix} Speed</span>
-            <span className="transfer-panel__speed-value">
-              {isTransferring ? formatSpeed(transferSpeed) : '—'}
             </span>
           </div>
         </div>
@@ -99,31 +67,6 @@ export default function TransferPanel({
               alt="Received file preview"
               className="transfer-panel__preview-image"
             />
-          )}
-        </div>
-      )}
-
-      {/* Send button */}
-      {isConnected && !isTransferring && (
-        <div className="transfer-panel__actions">
-          {isComplete && (
-            <button className="btn btn-ghost w-full" onClick={onReset} id="reset-btn">
-              Send another file
-            </button>
-          )}
-          {!isComplete && (
-            <button
-              className="btn btn-primary w-full"
-              onClick={onSendFiles}
-              disabled={!canSend}
-              id="send-file-btn"
-            >
-              {canSend
-                ? selectedFiles.length === 1
-                  ? `Send ${selectedFiles[0].name}`
-                  : `Send ${selectedFiles.length} files`
-                : 'Select files first'}
-            </button>
           )}
         </div>
       )}
